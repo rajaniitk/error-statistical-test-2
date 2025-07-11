@@ -64,32 +64,6 @@ def descriptive_statistics():
         logging.error(f"Descriptive statistics error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@statistical_tests_bp.route('/normality', methods=['POST'])
-def normality_test():
-    """Perform normality test on a column"""
-    try:
-        dataset_id = request.json.get('dataset_id')
-        column = request.json.get('column')
-        test_type = request.json.get('test_type', 'shapiro')
-        
-        if not dataset_id or not column:
-            return jsonify({'success': False, 'error': 'Dataset ID and column are required'}), 400
-        
-        service = StatisticalTests()
-        result = service.normality_test(dataset_id, column, test_type)
-        
-        if result['success']:
-            return jsonify({
-                'success': True,
-                'result': result['results']
-            })
-        else:
-            return jsonify({'success': False, 'error': result['error']}), 400
-        
-    except Exception as e:
-        logging.error(f"Normality test error: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 @statistical_tests_bp.route('/correlation', methods=['POST'])
 def correlation_test():
     """Perform correlation test between two columns"""
@@ -106,9 +80,15 @@ def correlation_test():
         result = service.correlation_test(dataset_id, column1, column2, method)
         
         if result['success']:
+            # Ensure the response structure matches frontend expectations
+            response_data = result['results'].copy()
+            # Map correlation_coefficient to correlation for frontend compatibility
+            if 'correlation_coefficient' in response_data:
+                response_data['correlation'] = response_data['correlation_coefficient']
+            
             return jsonify({
                 'success': True,
-                'result': result['results']
+                'result': response_data  # Changed from 'results' to 'result'
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -134,23 +114,35 @@ def t_test():
         if test_type == 'one_sample':
             column = request.json.get('column')
             mu = request.json.get('mu', 0)
+            if not column:
+                return jsonify({'success': False, 'error': 'Column is required for one-sample t-test'}), 400
             result = service.ttest(dataset_id, column, 'one_sample', mu)
         elif test_type == 'two_sample':
             column = request.json.get('column')
             group_column = request.json.get('group_column')
+            if not column or not group_column:
+                return jsonify({'success': False, 'error': 'Column and group column are required for two-sample t-test'}), 400
             result = service.ttest(dataset_id, column, 'two_sample', group_column=group_column)
         elif test_type == 'paired':
             column1 = request.json.get('column1')
             column2 = request.json.get('column2')
+            if not column1 or not column2:
+                return jsonify({'success': False, 'error': 'Both columns are required for paired t-test'}), 400
             # For paired t-test, pass the columns as special parameters
             result = service.ttest(dataset_id, column1, 'paired', column1=column1, column2=column2)
         else:
             return jsonify({'success': False, 'error': 'Invalid test type'}), 400
         
         if result['success']:
+            # Ensure the response structure matches frontend expectations
+            response_data = result['results'].copy()
+            # Map test_statistic to statistic for frontend compatibility
+            if 'test_statistic' in response_data and 'statistic' not in response_data:
+                response_data['statistic'] = response_data['test_statistic']
+            
             return jsonify({
                 'success': True,
-                'result': result['results']
+                'result': response_data  # Changed from 'results' to 'result'
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -182,7 +174,7 @@ def anova_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'result': result['results']
+                'result': result['results']  # Changed from 'results' to 'result'
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -203,6 +195,12 @@ def chi_square_test():
         if not dataset_id or not test_type:
             return jsonify({'success': False, 'error': 'Dataset ID and test type are required'}), 400
         
+        # Validate test-specific parameters
+        if test_type == 'independence' and (not var1 or not var2):
+            return jsonify({'success': False, 'error': 'Both variables are required for independence test'}), 400
+        elif test_type == 'goodness_of_fit' and not var1:
+            return jsonify({'success': False, 'error': 'Variable is required for goodness of fit test'}), 400
+        
         dataset = Dataset.query.get_or_404(dataset_id)
         service = StatisticalTests()
         
@@ -211,40 +209,13 @@ def chi_square_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'result': result['results']
+                'result': result['results']  # Changed from 'results' to 'result'
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
         
     except Exception as e:
         logging.error(f"Chi-square test error: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@statistical_tests_bp.route('/variance', methods=['POST'])
-def test_equal_variance():
-    try:
-        dataset_id = request.json.get('dataset_id')
-        columns = request.json.get('columns', [])
-        test_type = request.json.get('test_type', 'levene')
-        
-        if not dataset_id or not columns:
-            return jsonify({'success': False, 'error': 'Dataset ID and columns are required'}), 400
-        
-        dataset = Dataset.query.get_or_404(dataset_id)
-        stats = StatisticalTests()
-        
-        results = stats.variance_test(dataset_id, columns, test_type)
-        
-        if results['success']:
-            return jsonify({
-                'success': True,
-                'results': results['results']
-            })
-        else:
-            return jsonify({'success': False, 'error': results['error']}), 400
-        
-    except Exception as e:
-        logging.error(f"Variance test error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @statistical_tests_bp.route('/nonparametric/<int:dataset_id>', methods=['POST'])
@@ -408,7 +379,7 @@ def mann_whitney_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'results': result['results']
+                'results': result['results']  # Keep as 'results' for consistency with frontend expectation
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -433,7 +404,7 @@ def wilcoxon_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'results': result['results']
+                'results': result['results']  # Keep as 'results' for consistency with frontend expectation
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -458,7 +429,7 @@ def kruskal_wallis_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'results': result['results']
+                'results': result['results']  # Keep as 'results' for consistency with frontend expectation
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -482,7 +453,7 @@ def friedman_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'results': result['results']
+                'results': result['results']  # Keep as 'results' for consistency with frontend expectation
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
@@ -507,39 +478,13 @@ def mcnemar_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'results': result['results']
+                'results': result['results']  # Keep as 'results' for consistency with frontend expectation
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
         
     except Exception as e:
         logging.error(f"McNemar test error: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@statistical_tests_bp.route('/multiple_comparisons', methods=['POST'])
-def multiple_comparisons_test():
-    try:
-        dataset_id = request.json.get('dataset_id')
-        dependent_var = request.json.get('dependent_var')
-        independent_var = request.json.get('independent_var')
-        method = request.json.get('method', 'tukey')
-        
-        if not dataset_id or not dependent_var or not independent_var:
-            return jsonify({'success': False, 'error': 'Dataset ID, dependent and independent variables are required'}), 400
-        
-        service = StatisticalTests()
-        result = service.multiple_comparison(dataset_id, dependent_var, independent_var, method)
-        
-        if result['success']:
-            return jsonify({
-                'success': True,
-                'results': result['results']
-            })
-        else:
-            return jsonify({'success': False, 'error': result['error']}), 400
-        
-    except Exception as e:
-        logging.error(f"Multiple comparisons test error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @statistical_tests_bp.route('/multiple_comparison', methods=['POST'])
@@ -560,11 +505,67 @@ def multiple_comparison_test():
         if result['success']:
             return jsonify({
                 'success': True,
-                'results': result['results']
+                'results': result['results']  # Keep as 'results' for consistency with frontend expectation
             })
         else:
             return jsonify({'success': False, 'error': result['error']}), 400
         
     except Exception as e:
         logging.error(f"Multiple comparison test error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@statistical_tests_bp.route('/variance', methods=['POST'])
+def test_equal_variance():
+    try:
+        dataset_id = request.json.get('dataset_id')
+        columns = request.json.get('columns', [])
+        test_type = request.json.get('test_type', 'levene')
+        
+        if not dataset_id or not columns:
+            return jsonify({'success': False, 'error': 'Dataset ID and columns are required'}), 400
+        
+        if len(columns) < 2:
+            return jsonify({'success': False, 'error': 'At least 2 columns are required for variance test'}), 400
+        
+        dataset = Dataset.query.get_or_404(dataset_id)
+        stats = StatisticalTests()
+        
+        results = stats.variance_test(dataset_id, columns, test_type)
+        
+        if results['success']:
+            return jsonify({
+                'success': True,
+                'results': results['results']
+            })
+        else:
+            return jsonify({'success': False, 'error': results['error']}), 400
+        
+    except Exception as e:
+        logging.error(f"Variance test error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@statistical_tests_bp.route('/normality', methods=['POST'])
+def normality_test():
+    """Perform normality test on a column"""
+    try:
+        dataset_id = request.json.get('dataset_id')
+        column = request.json.get('column')
+        test_type = request.json.get('test_type', 'shapiro')
+        
+        if not dataset_id or not column:
+            return jsonify({'success': False, 'error': 'Dataset ID and column are required'}), 400
+        
+        service = StatisticalTests()
+        result = service.normality_test(dataset_id, column, test_type)
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'result': result['results']  # Changed from 'results' to 'result'
+            })
+        else:
+            return jsonify({'success': False, 'error': result['error']}), 400
+        
+    except Exception as e:
+        logging.error(f"Normality test error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
