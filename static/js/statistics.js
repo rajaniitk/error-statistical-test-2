@@ -626,24 +626,68 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(requestData)
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.result) {
                 displayTTestResult(data.result, testType, alpha);
             } else {
-                throw new Error(data.error || 'Failed to run T-test');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run T-test';
+                displayTTestError(errorMessage, testType, requestData);
             }
             
         } catch (error) {
             console.error('Error running t-test:', error);
-            showError('Failed to run t-test: ' + error.message);
+            // Handle network errors
+            if (error.message.includes('HTTP error!')) {
+                displayTTestError('Server error occurred. Please check your data and parameters.', testType, requestData);
+            } else {
+                displayTTestError('Network error: ' + error.message, testType, requestData);
+            }
         } finally {
             hideLoading();
         }
+    }
+    
+    function displayTTestError(errorMessage, testType, requestData) {
+        const container = document.getElementById('ttest-results');
+        
+        let parameterInfo = '';
+        if (testType === 'one_sample') {
+            parameterInfo = `<p><strong>Column:</strong> "${requestData.column || 'Not selected'}"</p>
+                           <p><strong>Test Value (μ):</strong> ${requestData.mu || 'Not specified'}</p>`;
+        } else if (testType === 'two_sample') {
+            parameterInfo = `<p><strong>Data Column:</strong> "${requestData.column || 'Not selected'}"</p>
+                           <p><strong>Group Column:</strong> "${requestData.group_column || 'Not selected'}"</p>`;
+        } else if (testType === 'paired') {
+            parameterInfo = `<p><strong>Before Column:</strong> "${requestData.column1 || 'Not selected'}"</p>
+                           <p><strong>After Column:</strong> "${requestData.column2 || 'Not selected'}"</p>`;
+        }
+        
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>T-Test Error</h4>
+                <p><strong>Test Type:</strong> ${testType.replace('_', ' ').toUpperCase()}</p>
+                ${parameterInfo}
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure all required columns are selected</li>
+                        <li>Check that data columns contain numeric data</li>
+                        <li>Verify group columns have exactly 2 groups (for two-sample test)</li>
+                        <li>Ensure sufficient data points in each group (minimum 2-3 per group)</li>
+                        <li>Check for missing or invalid values</li>
+                    </ul>
+                    <p><strong>Test requirements:</strong></p>
+                    <ul>
+                        <li><strong>One-sample:</strong> Column with 3+ numeric values</li>
+                        <li><strong>Two-sample:</strong> Data column + group column with exactly 2 groups, 2+ values per group</li>
+                        <li><strong>Paired:</strong> Two numeric columns with 3+ paired observations</li>
+                    </ul>
+                </div>
+            </div>
+        `;
     }
     
     function displayTTestResult(result, testType, alpha) {
@@ -731,24 +775,57 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.result) {
                 displayANOVAResult(data.result, dependent, independent, anovaType);
             } else {
-                throw new Error(data.error || 'Failed to run ANOVA');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run ANOVA';
+                displayANOVAError(errorMessage, dependent, independent, anovaType);
             }
             
         } catch (error) {
             console.error('Error running ANOVA:', error);
-            showError('Failed to run ANOVA: ' + error.message);
+            // Handle network errors
+            if (error.message.includes('HTTP error!')) {
+                displayANOVAError('Server error occurred. Please check your data and parameters.', dependent, independent, anovaType);
+            } else {
+                displayANOVAError('Network error: ' + error.message, dependent, independent, anovaType);
+            }
         } finally {
             hideLoading();
         }
+    }
+    
+    function displayANOVAError(errorMessage, dependent, independent, anovaType) {
+        const container = document.getElementById('anova-results');
+        
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>ANOVA Error</h4>
+                <p><strong>Test Type:</strong> ${anovaType.replace('_', ' ').toUpperCase()}</p>
+                <p><strong>Dependent Variable:</strong> "${dependent || 'Not selected'}"</p>
+                <p><strong>Independent Variable:</strong> "${independent || 'Not selected'}"</p>
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure both dependent and independent variables are selected</li>
+                        <li>Check that dependent variable contains numeric data</li>
+                        <li>Verify independent variable has 2+ groups with sufficient data</li>
+                        <li>Ensure at least 5 total observations for the test</li>
+                        <li>Check for missing or invalid values</li>
+                    </ul>
+                    <p><strong>ANOVA requirements:</strong></p>
+                    <ul>
+                        <li><strong>One-way:</strong> Numeric dependent variable + categorical independent variable with 2+ groups</li>
+                        <li><strong>Two-way:</strong> Numeric dependent variable + 2 categorical independent variables</li>
+                        <li><strong>Data:</strong> Minimum 5 observations total, at least 2 per group</li>
+                    </ul>
+                </div>
+            </div>
+        `;
     }
     
     function displayANOVAResult(result, dependent, independent, anovaType) {
