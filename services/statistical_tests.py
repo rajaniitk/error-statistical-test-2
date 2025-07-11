@@ -19,6 +19,41 @@ import json
 class StatisticalTests:
     def __init__(self):
         self.data_processor = DataProcessor()
+        
+    def _validate_numeric_column(self, df, column_name):
+        """Helper method to validate and convert a column to numeric"""
+        if column_name not in df.columns:
+            return None, f'Column "{column_name}" not found in dataset'
+        
+        try:
+            # Try to convert to numeric
+            numeric_data = pd.to_numeric(df[column_name], errors='coerce')
+            valid_data = numeric_data.dropna()
+            
+            if len(valid_data) == 0:
+                return None, f'Column "{column_name}" contains no valid numeric data'
+            
+            if len(valid_data) < len(df[column_name]) * 0.5:
+                return None, f'Column "{column_name}" contains mostly non-numeric data ({len(valid_data)}/{len(df[column_name])} valid values)'
+            
+            return valid_data, None
+            
+        except Exception as e:
+            return None, f'Cannot process column "{column_name}": {str(e)}'
+    
+    def _get_dataset_info(self, dataset_id):
+        """Helper method to get dataset and basic info"""
+        try:
+            dataset = Dataset.query.get_or_404(dataset_id)
+            df = self.data_processor.load_dataset(dataset)
+            
+            if df is None or df.empty:
+                return None, None, 'Dataset is empty or could not be loaded'
+            
+            return dataset, df, None
+            
+        except Exception as e:
+            return None, None, f'Error loading dataset: {str(e)}'
     
     def get_descriptive_statistics_by_id(self, dataset_id, columns=None):
         """Get descriptive statistics for specified columns using dataset ID"""
@@ -226,26 +261,22 @@ class StatisticalTests:
     
     def ttest(self, dataset_id, column, test_type='one_sample', mu=0, group_column=None, column1=None, column2=None):
         try:
-            dataset = Dataset.query.get_or_404(dataset_id)
-            df = self.data_processor.load_dataset(dataset)
-            
-            if column not in df.columns:
-                return {'success': False, 'error': f'Column {column} not found'}
-            
-            # Ensure column is numeric
-            try:
-                df[column] = pd.to_numeric(df[column], errors='coerce')
-            except:
-                return {'success': False, 'error': f'Cannot convert column "{column}" to numeric data'}
-            
-            data = df[column].dropna()
-            
-            if len(data) < 3:
-                return {'success': False, 'error': 'Insufficient data for t-test'}
+            # Use helper method for better error handling
+            dataset, df, error = self._get_dataset_info(dataset_id)
+            if error:
+                return {'success': False, 'error': error}
             
             results = {'test_type': test_type, 'column': column}
             
             if test_type == 'one_sample':
+                # Validate the column
+                data, error = self._validate_numeric_column(df, column)
+                if error:
+                    return {'success': False, 'error': error}
+                
+                if len(data) < 3:
+                    return {'success': False, 'error': f'Insufficient data for one-sample t-test. Column "{column}" has only {len(data)} valid values. At least 3 are required.'}
+                
                 statistic, p_value = stats.ttest_1samp(data, mu)
                 results.update({
                     'null_hypothesis': f'Mean of {column} equals {mu}',
@@ -263,15 +294,25 @@ class StatisticalTests:
                     return {'success': False, 'error': 'Group column required for two-sample t-test'}
                 
                 if group_column not in df.columns:
-                    return {'success': False, 'error': f'Group column {group_column} not found'}
+                    return {'success': False, 'error': f'Group column "{group_column}" not found'}
                 
-                groups = df.groupby(group_column)[column].apply(lambda x: x.dropna())
+                # Validate the data column
+                data, error = self._validate_numeric_column(df, column)
+                if error:
+                    return {'success': False, 'error': error}
+                
+                # Group the data
+                clean_df = df[[column, group_column]].dropna()
+                groups = clean_df.groupby(group_column)[column].apply(lambda x: pd.to_numeric(x, errors='coerce').dropna())
                 group_names = list(groups.index)
                 
                 if len(group_names) != 2:
-                    return {'success': False, 'error': 'Exactly two groups required for two-sample t-test'}
+                    return {'success': False, 'error': f'Exactly two groups required for two-sample t-test. Found {len(group_names)} groups: {group_names}'}
                 
                 group1, group2 = groups.iloc[0], groups.iloc[1]
+                
+                if len(group1) < 2 or len(group2) < 2:
+                    return {'success': False, 'error': f'Each group must have at least 2 observations. Group sizes: {len(group1)}, {len(group2)}'}
                 
                 # Equal variance test first
                 levene_stat, levene_p = stats.levene(group1, group2)
@@ -296,11 +337,24 @@ class StatisticalTests:
             elif test_type == 'paired':
                 # For paired t-test, we need two paired columns
                 if column1 and column2 and column1 in df.columns and column2 in df.columns:
+                    # Validate both columns
+                    data1, error1 = self._validate_numeric_column(df, column1)
+                    if error1:
+                        return {'success': False, 'error': f'First column: {error1}'}
+                    
+                    data2, error2 = self._validate_numeric_column(df, column2)
+                    if error2:
+                        return {'success': False, 'error': f'Second column: {error2}'}
+                    
                     clean_df = df[[column1, column2]].dropna()
                     if len(clean_df) < 3:
-                        return {'success': False, 'error': 'Insufficient paired data for t-test'}
+                        return {'success': False, 'error': f'Insufficient paired data for t-test. Only {len(clean_df)} complete pairs available. At least 3 are required.'}
                     
-                    statistic, p_value = stats.ttest_rel(clean_df[column1], clean_df[column2])
+                    numeric_df = clean_df.apply(pd.to_numeric, errors='coerce').dropna()
+                    if len(numeric_df) < 3:
+                        return {'success': False, 'error': f'Insufficient numeric paired data for t-test. Only {len(numeric_df)} valid numeric pairs available.'}
+                    
+                    statistic, p_value = stats.ttest_rel(numeric_df[column1], numeric_df[column2])
                     
                     results.update({
                         'column1': column1,
@@ -309,13 +363,13 @@ class StatisticalTests:
                         'alternative_hypothesis': f'Mean difference between {column1} and {column2} is not zero',
                         'test_statistic': float(statistic),
                         'p_value': float(p_value),
-                        'degrees_of_freedom': len(clean_df) - 1,
-                        'mean_difference': float((clean_df[column1] - clean_df[column2]).mean()),
-                        'sample_size': len(clean_df),
+                        'degrees_of_freedom': len(numeric_df) - 1,
+                        'mean_difference': float((numeric_df[column1] - numeric_df[column2]).mean()),
+                        'sample_size': len(numeric_df),
                         'interpretation': self.interpret_p_value(p_value, 'reject null hypothesis of no difference')
                     })
                 else:
-                    return {'success': False, 'error': 'Both columns required for paired t-test'}
+                    return {'success': False, 'error': 'Both columns required for paired t-test and both must exist in the dataset'}
             
             # Save analysis
             analysis = Analysis(
@@ -334,13 +388,16 @@ class StatisticalTests:
             current_app.logger.error(f"T-test error: {str(e)}")
             return {'success': False, 'error': str(e)}
     
-    def anova(self, dataset_id, dependent_var, independent_var, test_type='one_way'):
+    def anova(self, dataset_id, dependent_var, independent_var, test_type='one_way', independent_var2=None):
         try:
             dataset = Dataset.query.get_or_404(dataset_id)
             df = self.data_processor.load_dataset(dataset)
             
             if dependent_var not in df.columns or independent_var not in df.columns:
                 return {'success': False, 'error': 'Required columns not found'}
+            
+            if test_type == 'two_way' and (independent_var2 is None or independent_var2 not in df.columns):
+                return {'success': False, 'error': 'Second independent variable required for two-way ANOVA'}
             
             # Ensure dependent variable is numeric
             try:
@@ -349,17 +406,20 @@ class StatisticalTests:
                 return {'success': False, 'error': f'Cannot convert dependent variable "{dependent_var}" to numeric data'}
             
             # Remove missing values
-            clean_df = df[[dependent_var, independent_var]].dropna()
+            if test_type == 'two_way':
+                clean_df = df[[dependent_var, independent_var, independent_var2]].dropna()
+            else:
+                clean_df = df[[dependent_var, independent_var]].dropna()
             
             if len(clean_df) < 5:
                 return {'success': False, 'error': 'Insufficient data for ANOVA'}
             
-            groups = clean_df.groupby(independent_var)[dependent_var].apply(list)
-            
-            if len(groups) < 2:
-                return {'success': False, 'error': 'At least 2 groups required for ANOVA'}
-            
             if test_type == 'one_way':
+                groups = clean_df.groupby(independent_var)[dependent_var].apply(list)
+                
+                if len(groups) < 2:
+                    return {'success': False, 'error': 'At least 2 groups required for ANOVA'}
+                
                 # One-way ANOVA
                 statistic, p_value = stats.f_oneway(*groups)
                 
@@ -406,8 +466,53 @@ class StatisticalTests:
                         pass
             
             elif test_type == 'two_way':
-                # Two-way ANOVA (for now, just inform user it's not fully implemented)
-                return {'success': False, 'error': 'Two-way ANOVA not yet implemented. Please use one-way ANOVA for now.'}
+                try:
+                    # Two-way ANOVA using statsmodels
+                    import statsmodels.api as sm
+                    from statsmodels.formula.api import ols
+                    
+                    # Create formula for two-way ANOVA
+                    formula = f'Q("{dependent_var}") ~ C(Q("{independent_var}")) + C(Q("{independent_var2}")) + C(Q("{independent_var}")):C(Q("{independent_var2}"))'
+                    
+                    # Fit the model
+                    model = ols(formula, data=clean_df).fit()
+                    anova_table = sm.stats.anova_lm(model, typ=2)
+                    
+                    results = {
+                        'test_type': 'two_way_anova',
+                        'dependent_variable': dependent_var,
+                        'independent_variable1': independent_var,
+                        'independent_variable2': independent_var2,
+                        'null_hypothesis': 'No main effects or interaction effects',
+                        'alternative_hypothesis': 'At least one main effect or interaction effect exists',
+                        'anova_table': {
+                            'sources': [],
+                            'f_statistics': [],
+                            'p_values': [],
+                            'degrees_of_freedom': []
+                        }
+                    }
+                    
+                    # Extract results from ANOVA table
+                    for source in anova_table.index:
+                        if source != 'Residual':
+                            results['anova_table']['sources'].append(str(source))
+                            results['anova_table']['f_statistics'].append(float(anova_table.loc[source, 'F']))
+                            results['anova_table']['p_values'].append(float(anova_table.loc[source, 'PR(>F)']))
+                            results['anova_table']['degrees_of_freedom'].append(int(anova_table.loc[source, 'df']))
+                    
+                    # Overall interpretation
+                    significant_effects = [source for source, p_val in zip(results['anova_table']['sources'], results['anova_table']['p_values']) if p_val < 0.05]
+                    
+                    if significant_effects:
+                        results['interpretation'] = f"Significant effects found for: {', '.join(significant_effects)}"
+                    else:
+                        results['interpretation'] = "No significant main effects or interaction effects found"
+                    
+                    results['model_summary'] = str(model.summary())
+                    
+                except Exception as e:
+                    return {'success': False, 'error': f'Two-way ANOVA failed: {str(e)}. Make sure statsmodels is installed and data is properly formatted.'}
             
             else:
                 return {'success': False, 'error': f'Test type {test_type} not implemented'}
@@ -417,7 +522,7 @@ class StatisticalTests:
                 dataset_id=dataset_id,
                 analysis_type='anova',
                 analysis_name=f'{test_type.replace("_", " ").title()} ANOVA',
-                parameters={'dependent_var': dependent_var, 'independent_var': independent_var, 'test_type': test_type},
+                parameters={'dependent_var': dependent_var, 'independent_var': independent_var, 'independent_var2': independent_var2, 'test_type': test_type},
                 results=results
             )
             db.session.add(analysis)
@@ -595,27 +700,24 @@ class StatisticalTests:
     
     def normality_test(self, dataset_id, column, test_type='shapiro'):
         try:
-            dataset = Dataset.query.get_or_404(dataset_id)
-            df = self.data_processor.load_dataset(dataset)
+            # Use helper method for better error handling
+            dataset, df, error = self._get_dataset_info(dataset_id)
+            if error:
+                return {'success': False, 'error': error}
             
-            if column not in df.columns:
-                return {'success': False, 'error': f'Column {column} not found'}
+            # Validate the column
+            data, error = self._validate_numeric_column(df, column)
+            if error:
+                return {'success': False, 'error': error}
             
-            # Ensure column is numeric
-            try:
-                data = pd.to_numeric(df[column], errors='coerce').dropna()
-                
-                if len(data) < 3:
-                    return {'success': False, 'error': f'Insufficient numeric data for normality test. Column "{column}" may contain non-numeric values.'}
-                    
-            except Exception:
-                return {'success': False, 'error': f'Cannot convert column "{column}" to numeric data'}
+            if len(data) < 3:
+                return {'success': False, 'error': f'Insufficient data points for normality test. Column "{column}" has only {len(data)} valid numeric values. At least 3 are required.'}
             
             results = {'test_type': test_type, 'column': column}
             
             if test_type == 'shapiro':
                 if len(data) > 5000:
-                    return {'success': False, 'error': 'Shapiro-Wilk test limited to 5000 samples'}
+                    return {'success': False, 'error': 'Shapiro-Wilk test limited to 5000 samples. Please use another normality test for large datasets.'}
                 
                 statistic, p_value = stats.shapiro(data)
                 results.update({
@@ -629,6 +731,9 @@ class StatisticalTests:
                 })
                 
             elif test_type == 'kolmogorov_smirnov':
+                if len(data) < 5:
+                    return {'success': False, 'error': 'Kolmogorov-Smirnov test requires at least 5 data points'}
+                    
                 # Test against normal distribution with sample mean and std
                 statistic, p_value = stats.kstest(
                     data, 
@@ -645,6 +750,9 @@ class StatisticalTests:
                 })
                 
             elif test_type == 'anderson_darling':
+                if len(data) < 5:
+                    return {'success': False, 'error': 'Anderson-Darling test requires at least 5 data points'}
+                    
                 result = stats.anderson(data, dist='norm')
                 # Use 5% significance level
                 critical_value = result.critical_values[2]  # 5% level
@@ -693,7 +801,7 @@ class StatisticalTests:
                     return {'success': False, 'error': 'Lilliefors test failed - requires statsmodels'}
             
             else:
-                return {'success': False, 'error': f'Unknown normality test: {test_type}'}
+                return {'success': False, 'error': f'Unknown normality test: {test_type}. Supported tests: shapiro, kolmogorov_smirnov, anderson_darling, jarque_bera, lilliefors'}
             
             # Add descriptive statistics
             results['descriptive_stats'] = {
@@ -1179,8 +1287,8 @@ class StatisticalTests:
             
             groups = clean_df.groupby(independent_var)[dependent_var].apply(list)
             
-            if len(groups) < 3:
-                return {'success': False, 'error': 'At least 3 groups required for multiple comparison'}
+            if len(groups) < 2:
+                return {'success': False, 'error': 'At least 2 groups required for multiple comparison'}
             
             results = {
                 'method': method,
@@ -1216,8 +1324,59 @@ class StatisticalTests:
                 except Exception as e:
                     return {'success': False, 'error': f'Tukey test failed: {str(e)}'}
             
+            elif method in ['bonferroni', 'holm']:
+                try:
+                    from scipy.stats import ttest_ind
+                    from statsmodels.stats.multitest import multipletests
+                    
+                    group_names = list(groups.index)
+                    group_data = [list(groups[name]) for name in group_names]
+                    
+                    # Perform pairwise t-tests
+                    pairwise_results = []
+                    p_values = []
+                    
+                    for i in range(len(group_names)):
+                        for j in range(i + 1, len(group_names)):
+                            stat, p_val = ttest_ind(group_data[i], group_data[j])
+                            pairwise_results.append({
+                                'group1': str(group_names[i]),
+                                'group2': str(group_names[j]),
+                                'mean_diff': float(np.mean(group_data[i]) - np.mean(group_data[j])),
+                                'p_value_raw': float(p_val),
+                                't_statistic': float(stat)
+                            })
+                            p_values.append(p_val)
+                    
+                    # Apply multiple comparisons correction
+                    if method == 'bonferroni':
+                        reject, p_corrected, alpha_sidak, alpha_bonf = multipletests(p_values, method='bonferroni')
+                        correction_name = 'Bonferroni'
+                    else:  # holm
+                        reject, p_corrected, alpha_sidak, alpha_bonf = multipletests(p_values, method='holm')
+                        correction_name = 'Holm-Bonferroni'
+                    
+                    # Update results with corrected p-values
+                    for i, result in enumerate(pairwise_results):
+                        result.update({
+                            'p_value': float(p_corrected[i]),
+                            'reject': bool(reject[i]),
+                            'significant': bool(reject[i])
+                        })
+                    
+                    results.update({
+                        'test_name': f'{correction_name} Multiple Comparisons',
+                        'correction_method': method,
+                        'alpha_corrected': float(alpha_bonf),
+                        'group_comparisons': pairwise_results,
+                        'summary': f'Performed {len(pairwise_results)} pairwise comparisons with {correction_name} correction'
+                    })
+                    
+                except Exception as e:
+                    return {'success': False, 'error': f'{method.title()} test failed: {str(e)}'}
+            
             else:
-                return {'success': False, 'error': f'Method {method} not implemented'}
+                return {'success': False, 'error': f'Method {method} not implemented. Supported methods: tukey, bonferroni, holm'}
             
             # Save analysis
             analysis = Analysis(

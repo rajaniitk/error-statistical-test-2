@@ -3,6 +3,7 @@ from services.statistical_tests import StatisticalTests
 from database import db
 from models import Dataset, Analysis
 import logging
+import pandas as pd
 
 statistical_tests_bp = Blueprint('statistical_tests', __name__, url_prefix='/api/statistical')
 
@@ -168,6 +169,10 @@ def anova_test():
         
         if anova_type == 'one_way':
             result = service.anova(dataset_id, dependent, independent[0] if independent else None, 'one_way')
+        elif anova_type == 'two_way':
+            if len(independent) < 2:
+                return jsonify({'success': False, 'error': 'Two independent variables required for two-way ANOVA'}), 400
+            result = service.anova(dataset_id, dependent, independent[0], 'two_way', independent[1])
         else:
             return jsonify({'success': False, 'error': f'ANOVA type {anova_type} not implemented'}), 400
         
@@ -500,6 +505,7 @@ def multiple_comparison_test():
             return jsonify({'success': False, 'error': 'Dataset ID, dependent and independent variables are required'}), 400
         
         service = StatisticalTests()
+        # Fix parameter mapping: frontend sends 'dependent'/'independent', backend expects 'dependent_var'/'independent_var'
         result = service.multiple_comparison(dataset_id, dependent, independent, method)
         
         if result['success']:
@@ -568,4 +574,60 @@ def normality_test():
         
     except Exception as e:
         logging.error(f"Normality test error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@statistical_tests_bp.route('/debug_dataset/<int:dataset_id>', methods=['GET'])
+def debug_dataset(dataset_id):
+    """Debug endpoint to help identify dataset issues"""
+    try:
+        dataset = Dataset.query.get_or_404(dataset_id)
+        service = StatisticalTests()
+        
+        # Get dataset info
+        dataset_obj, df, error = service._get_dataset_info(dataset_id)
+        if error:
+            return jsonify({'success': False, 'error': error}), 400
+        
+        # Analyze columns
+        column_info = {}
+        for col in df.columns:
+            try:
+                # Try to get numeric data
+                numeric_data = pd.to_numeric(df[col], errors='coerce')
+                valid_numeric = numeric_data.dropna()
+                
+                column_info[col] = {
+                    'total_rows': len(df[col]),
+                    'non_null_rows': len(df[col].dropna()),
+                    'numeric_convertible': len(valid_numeric),
+                    'data_type': str(df[col].dtype),
+                    'sample_values': df[col].head(5).tolist(),
+                    'unique_values': min(df[col].nunique(), 10),
+                    'is_mostly_numeric': len(valid_numeric) >= len(df[col]) * 0.5 if len(df[col]) > 0 else False
+                }
+                
+                if len(valid_numeric) > 0:
+                    column_info[col]['numeric_stats'] = {
+                        'min': float(valid_numeric.min()),
+                        'max': float(valid_numeric.max()),
+                        'mean': float(valid_numeric.mean())
+                    }
+                    
+            except Exception as e:
+                column_info[col] = {'error': str(e)}
+        
+        return jsonify({
+            'success': True,
+            'dataset_info': {
+                'id': dataset_id,
+                'filename': dataset.filename,
+                'total_rows': len(df),
+                'total_columns': len(df.columns),
+                'column_names': list(df.columns)
+            },
+            'column_analysis': column_info
+        })
+        
+    except Exception as e:
+        logging.error(f"Debug dataset error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
