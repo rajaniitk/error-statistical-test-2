@@ -324,42 +324,100 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.result) {
                 displayNormalityResult(data.result, column, testType);
             } else {
-                throw new Error(data.error || 'Failed to run normality test');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run normality test';
+                displayNormalityError(errorMessage, column, testType);
             }
             
         } catch (error) {
             console.error('Error running normality test:', error);
-            showError('Failed to run normality test: ' + error.message);
+            // Handle network errors
+            if (error.message.includes('HTTP error!')) {
+                displayNormalityError('Server error occurred. Please check your data and try again.', column, testType);
+            } else {
+                displayNormalityError('Network error: ' + error.message, column, testType);
+            }
         } finally {
             hideLoading();
         }
     }
     
+    function displayNormalityError(errorMessage, column, testType) {
+        const container = document.getElementById('normality-results');
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>Normality Test Error</h4>
+                <p><strong>Test:</strong> ${testType.replace('_', ' ').toUpperCase()}</p>
+                <p><strong>Column:</strong> "${column}"</p>
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure the column contains numeric data</li>
+                        <li>Check for sufficient data points (minimum varies by test)</li>
+                        <li>Remove or handle missing values</li>
+                        <li>Try a different normality test if sample size is an issue</li>
+                    </ul>
+                    <p><strong>Test requirements:</strong></p>
+                    <ul>
+                        <li><strong>Shapiro-Wilk:</strong> 3-5000 data points</li>
+                        <li><strong>Anderson-Darling:</strong> 5+ data points</li>
+                        <li><strong>Kolmogorov-Smirnov:</strong> 5+ data points</li>
+                        <li><strong>Jarque-Bera:</strong> 20+ data points</li>
+                    </ul>
+                </div>
+            </div>
+        `;
+    }
+
     function displayNormalityResult(result, column, testType) {
         const container = document.getElementById('normality-results');
         
-        // Safely handle undefined/null values
-        if (!result || typeof result.p_value === 'undefined' || result.p_value === null) {
-            container.innerHTML = `
-                <div class="test-result error">
-                    <h4>Normality Test Error</h4>
-                    <p>Unable to perform normality test on "${column}". This may be due to:</p>
-                    <ul>
-                        <li>Non-numeric data in selected column</li>
-                        <li>Insufficient data points</li>
-                        <li>Missing or invalid values</li>
-                    </ul>
+        // Check if we have Anderson-Darling specific results
+        if (testType === 'anderson_darling' && result.is_normal_5_percent !== undefined) {
+            const isNormal = result.is_normal_5_percent;
+            const conclusion = isNormal ? 
+                'The data appears to be normally distributed' : 
+                'The data does not appear to be normally distributed';
+            
+            const html = `
+                <div class="test-result ${isNormal ? 'normal' : 'not-normal'}">
+                    <h4>Anderson-Darling Test Results for "${column}"</h4>
+                    <div class="result-stats">
+                        <div class="stat-item">
+                            <strong>Test Statistic:</strong> ${safeFormat(result.test_statistic)}
+                        </div>
+                        <div class="stat-item">
+                            <strong>Critical Values:</strong> ${result.critical_values ? result.critical_values.map(v => v.toFixed(3)).join(', ') : 'N/A'}
+                        </div>
+                        <div class="stat-item">
+                            <strong>Significance Levels:</strong> ${result.significance_levels ? result.significance_levels.join('%, ') + '%' : 'N/A'}
+                        </div>
+                        <div class="stat-item">
+                            <strong>Sample Size:</strong> ${result.sample_size || 'N/A'}
+                        </div>
+                        <div class="stat-item">
+                            <strong>Normal at 5%:</strong> ${isNormal ? 'Yes' : 'No'}
+                        </div>
+                    </div>
+                    <div class="conclusion">
+                        <strong>Conclusion:</strong> ${conclusion}
+                        <br><small>Anderson-Darling test compares test statistic to critical values</small>
+                    </div>
                 </div>
             `;
+            container.innerHTML = html;
+            return;
+        }
+        
+        // Handle other tests with p-values
+        if (!result || typeof result.p_value === 'undefined' || result.p_value === null) {
+            displayNormalityError('Invalid test results - no p-value available', column, testType);
             return;
         }
         
@@ -373,10 +431,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 <h4>${testType.replace('_', ' ').toUpperCase()} Test Results for "${column}"</h4>
                 <div class="result-stats">
                     <div class="stat-item">
-                        <strong>Test Statistic:</strong> ${result.test_statistic && typeof result.test_statistic === 'number' ? result.test_statistic.toFixed(4) : 'N/A'}
+                        <strong>Test Statistic:</strong> ${safeFormat(result.test_statistic)}
                     </div>
                     <div class="stat-item">
-                        <strong>P-value:</strong> ${result.p_value && typeof result.p_value === 'number' ? result.p_value.toFixed(4) : 'N/A'}
+                        <strong>P-value:</strong> ${safeFormat(result.p_value)}
                     </div>
                     <div class="stat-item">
                         <strong>Sample Size:</strong> ${result.sample_size || 'N/A'}
@@ -391,6 +449,18 @@ document.addEventListener('DOMContentLoaded', function() {
                         ' (p < α, reject null hypothesis)' : 
                         ' (p ≥ α, fail to reject null hypothesis)'}
                 </div>
+                ${result.descriptive_stats ? `
+                <div class="descriptive-stats">
+                    <h5>Descriptive Statistics:</h5>
+                    <div class="stats-grid">
+                        <div class="stat-item">Mean: ${safeFormat(result.descriptive_stats.mean)}</div>
+                        <div class="stat-item">Median: ${safeFormat(result.descriptive_stats.median)}</div>
+                        <div class="stat-item">Std Dev: ${safeFormat(result.descriptive_stats.std)}</div>
+                        <div class="stat-item">Skewness: ${safeFormat(result.descriptive_stats.skewness)}</div>
+                        <div class="stat-item">Kurtosis: ${safeFormat(result.descriptive_stats.kurtosis)}</div>
+                    </div>
+                </div>
+                ` : ''}
             </div>
         `;
         
