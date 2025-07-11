@@ -893,26 +893,46 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.result) {
                 displayChiSquareResult(data.result, testType);
             } else {
-                throw new Error(data.error || 'Failed to run chi-square test');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run chi-square test';
+                displayChiSquareError(errorMessage, testType);
             }
             
         } catch (error) {
             console.error('Error running chi-square test:', error);
-            showError('Failed to run chi-square test: ' + error.message);
+            displayChiSquareError('Network error: ' + error.message, testType);
         } finally {
             hideLoading();
         }
     }
     
+    function displayChiSquareError(errorMessage, testType) {
+        const container = document.getElementById('chi-square-results');
+        
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>Chi-Square Test Error</h4>
+                <p><strong>Test Type:</strong> ${testType.replace('_', ' ').toUpperCase()}</p>
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure variables are selected for the test type</li>
+                        <li>Check that variables contain categorical data</li>
+                        <li>Verify sufficient observations in each category</li>
+                        <li>For independence test: select two categorical variables</li>
+                        <li>For goodness of fit: select one categorical variable</li>
+                    </ul>
+                </div>
+            </div>
+        `;
+    }
+
     function displayChiSquareResult(result, testType) {
         const container = document.getElementById('chi-square-results');
         
@@ -1019,24 +1039,71 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(requestData)
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.results) {
                 displayNonParametricResult(data.results, testType);
             } else {
-                throw new Error(data.error || 'Failed to run non-parametric test');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run non-parametric test';
+                displayNonParametricError(errorMessage, testType, requestData);
             }
             
         } catch (error) {
             console.error('Error running non-parametric test:', error);
-            showError('Failed to run non-parametric test: ' + error.message);
+            // Handle network errors
+            if (error.message.includes('HTTP error!')) {
+                displayNonParametricError('Server error occurred. Please check your data and parameters.', testType, requestData);
+            } else {
+                displayNonParametricError('Network error: ' + error.message, testType, requestData);
+            }
         } finally {
             hideLoading();
         }
+    }
+
+    function displayNonParametricError(errorMessage, testType, requestData) {
+        const container = document.getElementById('nonparametric-results');
+        
+        let parameterInfo = '';
+        if (testType === 'mann_whitney') {
+            parameterInfo = `<p><strong>Data Column:</strong> "${requestData.column || 'Not selected'}"</p>
+                           <p><strong>Group Column:</strong> "${requestData.group_column || 'Not selected'}"</p>`;
+        } else if (testType === 'wilcoxon') {
+            parameterInfo = `<p><strong>Column 1:</strong> "${requestData.column1 || 'Not selected'}"</p>
+                           <p><strong>Column 2:</strong> "${requestData.column2 || 'Not selected'}"</p>`;
+        } else if (testType === 'kruskal_wallis') {
+            parameterInfo = `<p><strong>Dependent Variable:</strong> "${requestData.dependent_var || 'Not selected'}"</p>
+                           <p><strong>Independent Variable:</strong> "${requestData.independent_var || 'Not selected'}"</p>`;
+        } else if (testType === 'friedman') {
+            parameterInfo = `<p><strong>Columns:</strong> ${requestData.columns ? requestData.columns.join(', ') : 'Not selected'}</p>`;
+        }
+        
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>Non-Parametric Test Error</h4>
+                <p><strong>Test Type:</strong> ${testType.replace('_', ' ').toUpperCase()}</p>
+                ${parameterInfo}
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure all required columns are selected</li>
+                        <li>Check that data columns contain numeric data</li>
+                        <li>Verify group columns have the correct number of groups</li>
+                        <li>Ensure sufficient data points per group</li>
+                        <li>Check for missing or invalid values</li>
+                    </ul>
+                    <p><strong>Test requirements:</strong></p>
+                    <ul>
+                        <li><strong>Mann-Whitney:</strong> Data column + group column with exactly 2 groups, 3+ values per group</li>
+                        <li><strong>Wilcoxon:</strong> Two numeric columns with 6+ paired observations</li>
+                        <li><strong>Kruskal-Wallis:</strong> Numeric dependent + categorical independent with 2+ groups</li>
+                        <li><strong>Friedman:</strong> 3+ numeric columns with 6+ complete observations</li>
+                    </ul>
+                </div>
+            </div>
+        `;
     }
 
     function displayNonParametricResult(result, testType) {
@@ -1177,24 +1244,44 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.results) {
                 displayMcNemarResult(data.results, column1, column2);
             } else {
-                throw new Error(data.error || 'Failed to run McNemar test');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run McNemar test';
+                displayMcNemarError(errorMessage, column1, column2);
             }
             
         } catch (error) {
             console.error('Error running McNemar test:', error);
-            showError('Failed to run McNemar test: ' + error.message);
+            displayMcNemarError('Network error: ' + error.message, column1, column2);
         } finally {
             hideLoading();
         }
+    }
+
+    function displayMcNemarError(errorMessage, column1, column2) {
+        const container = document.getElementById('mcnemar-results');
+        
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>McNemar Test Error</h4>
+                <p><strong>Column 1:</strong> "${column1 || 'Not selected'}"</p>
+                <p><strong>Column 2:</strong> "${column2 || 'Not selected'}"</p>
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure both columns are selected</li>
+                        <li>Check that both columns contain binary/categorical data</li>
+                        <li>Verify the data forms a 2x2 contingency table</li>
+                        <li>McNemar test requires paired observations</li>
+                    </ul>
+                </div>
+            </div>
+        `;
     }
 
     function displayMcNemarResult(result, column1, column2) {
@@ -1254,24 +1341,47 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
             const data = await response.json();
             
             if (data.success && data.results) {
                 displayMultipleComparisonResult(data.results, dependent, independent, method);
             } else {
-                throw new Error(data.error || 'Failed to run multiple comparison');
+                // Show the actual backend error message instead of generic one
+                const errorMessage = data.error || 'Failed to run multiple comparison';
+                displayMultipleComparisonError(errorMessage, dependent, independent, method);
             }
             
         } catch (error) {
             console.error('Error running multiple comparison:', error);
-            showError('Failed to run multiple comparison: ' + error.message);
+            displayMultipleComparisonError('Network error: ' + error.message, dependent, independent, method);
         } finally {
             hideLoading();
         }
+    }
+
+    function displayMultipleComparisonError(errorMessage, dependent, independent, method) {
+        const container = document.getElementById('multiple-comparison-results');
+        
+        container.innerHTML = `
+            <div class="test-result error">
+                <h4>Multiple Comparison Error</h4>
+                <p><strong>Method:</strong> ${method.replace('_', ' ').toUpperCase()}</p>
+                <p><strong>Dependent Variable:</strong> "${dependent || 'Not selected'}"</p>
+                <p><strong>Independent Variable:</strong> "${independent || 'Not selected'}"</p>
+                <p><strong>Error:</strong> ${errorMessage}</p>
+                <div class="error-help">
+                    <p><strong>Common solutions:</strong></p>
+                    <ul>
+                        <li>Ensure both dependent and independent variables are selected</li>
+                        <li>Check that dependent variable contains numeric data</li>
+                        <li>Verify independent variable has 2+ groups with sufficient data</li>
+                        <li>Ensure at least 10 total observations for reliable results</li>
+                        <li>Check for missing or invalid values</li>
+                    </ul>
+                    <p><strong>Supported methods:</strong> Tukey, Bonferroni, Holm</p>
+                </div>
+            </div>
+        `;
     }
 
     function displayMultipleComparisonResult(result, dependent, independent, method) {
